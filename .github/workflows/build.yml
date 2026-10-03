@@ -1,0 +1,106 @@
+name: Build DELTARUNE patch-launcher APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag that has base.apk attached (e.g. base)"
+        required: true
+        default: "base"
+      new_package:
+        description: "New application package name"
+        required: true
+        default: "com.deltapatch.deltarune"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Download base.apk from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "${{ inputs.release_tag }}" -p base.apk -O base.apk
+
+      - name: Get apktool
+        run: curl -L -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar
+
+      - name: Compile the launcher into a dex
+        run: |
+          SDK=$ANDROID_HOME/platforms/android-34/android.jar
+          BT=$ANDROID_HOME/build-tools/34.0.0
+          mkdir -p build/classes build/dex
+          javac --release 8 -Xlint:-options -cp "$SDK" -d build/classes $(find src -name '*.java')
+          $BT/d8 --release --min-api 21 --lib "$SDK" --output build/dex $(find build/classes -name '*.class')
+          ls -la build/dex
+
+      - name: Decode base.apk
+        run: java -jar apktool.jar d -f -o dec base.apk
+
+      - name: Safety check - package must differ from the installed game
+        run: |
+          if [ "${{ inputs.new_package }}" = "com.hadrian.deltarune" ]; then
+            echo "::error::new_package equals the original package; this would replace the installed game"; exit 1
+          fi
+
+      - name: Inject launcher (manifest, package rename, WADLoader hook)
+        run: python3 tools/inject.py dec "${{ inputs.new_package }}"
+
+      - name: Rebuild
+        run: java -jar apktool.jar b dec -o unsigned.apk
+
+      - name: Add launcher dex as an extra classesN.dex
+        run: |
+          N=2
+          while unzip -Z1 unsigned.apk | grep -qx "classes$N.dex"; do N=$((N+1)); done
+          cp build/dex/classes.dex "classes$N.dex"
+          zip -q -0 unsigned.apk "classes$N.dex"
+          unzip -Z1 unsigned.apk | grep -E '^classes[0-9]*\.dex$'
+
+      - name: Align and sign
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          BT=$ANDROID_HOME/build-tools/34.0.0
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > ks.jks
+            PASS="$KEYSTORE_PASS"; ALIAS="${KEY_ALIAS:-key}"
+          else
+            echo "::warning::No KEYSTORE_B64 secret - using a throw-away key. Later builds will not install over this one."
+            keytool -genkeypair -keystore ks.jks -storepass deltapatch -keypass deltapatch \
+              -alias key -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=DeltaPatch"
+            PASS=deltapatch; ALIAS=key
+          fi
+          $BT/zipalign -p -f 4 unsigned.apk aligned.apk
+          $BT/apksigner sign --ks ks.jks --ks-pass "pass:$PASS" --key-pass "pass:$PASS" \
+            --ks-key-alias "$ALIAS" --out DELTARUNE-patchlauncher.apk aligned.apk
+          $BT/apksigner verify --verbose DELTARUNE-patchlauncher.apk | head -5
+          ls -la DELTARUNE-patchlauncher.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DELTARUNE-patchlauncher
+          path: DELTARUNE-patchlauncher.apk
+          compression-level: 0
+
+      - name: Attach to the release (2 GB limit per file)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release_tag }}" DELTARUNE-patchlauncher.apk --clobber
