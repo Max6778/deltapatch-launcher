@@ -88,8 +88,13 @@ jobs:
         run: |
           BT=$ANDROID_HOME/build-tools/34.0.0
           if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > ks.jks
+            if ! printf '%s' "$KEYSTORE_B64" | tr -d ' \n\r\t"' | base64 -d > ks.jks 2>/dev/null; then
+              echo "::error::KEYSTORE_B64 is not valid base64. Recreate it with: base64 -w0 ks.jks  (copy the whole single line, no spaces/newlines)"; exit 1
+            fi
+            if [ -z "$KEYSTORE_PASS" ]; then echo "::error::KEYSTORE_PASS secret is empty"; exit 1; fi
             PASS="$KEYSTORE_PASS"; ALIAS="${KEY_ALIAS:-key}"
+            echo "Using keystore alias: $ALIAS"
+            keytool -list -keystore ks.jks -storepass "$PASS" | head -8
           else
             echo "::warning::No KEYSTORE_B64 secret - using a throw-away key. Later builds will not install over this one."
             keytool -genkeypair -keystore ks.jks -storepass deltapatch -keypass deltapatch \
