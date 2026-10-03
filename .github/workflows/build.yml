@@ -27,10 +27,15 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
-
+      # The ubuntu runner already ships the Android SDK; we only add the pieces we need.
       - name: Install SDK packages
-        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          SDKM=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-34" "build-tools;34.0.0"
+          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools"
 
       - name: Download base.apk from the release
         env:
