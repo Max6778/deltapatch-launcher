@@ -66,6 +66,9 @@ jobs:
       - name: Inject launcher (manifest, package rename, WADLoader hook)
         run: python3 tools/inject.py dec "${{ inputs.new_package }}"
 
+      - name: Remove unusable mipmap entries (base split has no icons)
+        run: python3 tools/fixres.py dec
+
       - name: Rebuild
         run: java -jar apktool.jar b dec -o unsigned.apk
 
