@@ -1,0 +1,124 @@
+name: Decompile and diff (PC data.win vs Android game.droid)
+
+# Decompiles the PC chapter file and the Android port's chapter file into GML text and diffs them,
+# so we can see exactly what the Android port changed. Run it in a PRIVATE repo only.
+on:
+  workflow_dispatch:
+    inputs:
+      input_tag:
+        description: "Release tag that holds the PC data.win"
+        required: true
+        default: "decompile-input"
+      pc_name:
+        description: "Name of the PC file asset in that release"
+        required: true
+        default: "data.win"
+      base_tag:
+        description: "Release tag that holds base.apk (used when the input release has no chapterN.droid)"
+        required: true
+        default: "base"
+      chapter:
+        description: "Chapter number"
+        required: true
+        default: "3"
+
+permissions:
+  contents: write
+
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Download the PC file
+        run: |
+          mkdir -p in out
+          gh release download "${{ inputs.input_tag }}" -R "${{ github.repository }}" -p "${{ inputs.pc_name }}" -O in/pc.win
+          ls -la in
+
+      - name: Get the Android file
+        run: |
+          CH="${{ inputs.chapter }}"
+          if gh release download "${{ inputs.input_tag }}" -R "${{ github.repository }}" -p "chapter$CH.droid" -O in/android.droid 2>/dev/null; then
+            echo "Using chapter$CH.droid from the release"
+          else
+            echo "No chapter$CH.droid in the release; extracting it from base.apk"
+            gh release download "${{ inputs.base_tag }}" -R "${{ github.repository }}" -p base.apk -O in/base.apk
+            unzip -p in/base.apk "assets/chapter$CH.wad" > in/ch.wad
+            unzip -p in/ch.wad assets/game.droid > in/android.droid
+            rm -f in/base.apk in/ch.wad
+          fi
+          ls -la in
+
+      - name: Build UndertaleModCli
+        run: |
+          git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/UnderminersTeam/UndertaleModTool utmt
+          cd utmt
+          dotnet publish UndertaleModCli -c Release --no-self-contained -o "$GITHUB_WORKSPACE/cli"
+          ls "$GITHUB_WORKSPACE/cli" | head -20
+
+      - name: Decompile (PC file)
+        run: |
+          export UTMT_OUT="$GITHUB_WORKSPACE/out/pc"
+          if ! dotnet cli/UndertaleModCli.dll load in/pc.win -s scripts/ExportCode.csx; then
+            echo "::error::CLI call failed - printing its help so the right syntax can be used"
+            dotnet cli/UndertaleModCli.dll --help || true
+            dotnet cli/UndertaleModCli.dll load --help || true
+            exit 1
+          fi
+          ls out/pc | wc -l
+
+      - name: Decompile (Android file)
+        run: |
+          export UTMT_OUT="$GITHUB_WORKSPACE/out/android"
+          dotnet cli/UndertaleModCli.dll load in/android.droid -s scripts/ExportCode.csx
+          ls out/android | wc -l
+
+      - name: Diff
+        run: |
+          cd out
+          diff -ru pc android > hadrian_edits.diff || true
+          diff -rq pc android > changed_files.txt || true
+          {
+            echo "## PC vs Android code diff"
+            echo "- PC scripts: $(ls pc | wc -l)"
+            echo "- Android scripts: $(ls android | wc -l)"
+            echo "- Differing/added/removed: $(wc -l < changed_files.txt)"
+            echo "- Diff size: $(du -h hadrian_edits.diff | cut -f1)"
+            echo
+            echo '```'
+            head -80 changed_files.txt
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          zip -qr dump_pc.zip pc
+          zip -qr dump_android.zip android
+
+      - name: Upload the diff (small)
+        uses: actions/upload-artifact@v4
+        with:
+          name: decompile-diff
+          path: |
+            out/hadrian_edits.diff
+            out/changed_files.txt
+
+      - name: Upload both decompiled folders (zips)
+        uses: actions/upload-artifact@v4
+        with:
+          name: decompiled-zips
+          path: |
+            out/dump_pc.zip
+            out/dump_android.zip
+          compression-level: 0
+
+      - name: Also attach to the private release
+        run: |
+          gh release upload "${{ inputs.input_tag }}" -R "${{ github.repository }}" \
+            out/hadrian_edits.diff out/changed_files.txt out/dump_pc.zip out/dump_android.zip --clobber
