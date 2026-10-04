@@ -156,7 +156,7 @@ final class PatchEngine {
                     + " needed, " + Store.human(free) + " available.");
     }
 
-    private static void extractEntry(Context c, String asset, String entry, File out) throws IOException {
+    static void extractEntry(Context c, String asset, String entry, File out) throws IOException {
         try (InputStream raw = c.getAssets().open(asset, android.content.res.AssetManager.ACCESS_STREAMING);
              ZipInputStream zin = new ZipInputStream(new BufferedInputStream(raw, 1 << 16))) {
             ZipEntry e;
@@ -169,7 +169,9 @@ final class PatchEngine {
 
     private static void rebuildWad(Context c, String asset, File game, List<File> oggs, String oggPrefix,
                                    File out) throws IOException {
-        Set<String> seen = new HashSet<>();
+        java.util.Map<String, File> byBase = new java.util.HashMap<>();
+        for (File f : oggs) byBase.put(f.getName().toLowerCase(java.util.Locale.ROOT), f);
+        Set<String> used = new HashSet<>();
         try (InputStream raw = c.getAssets().open(asset, android.content.res.AssetManager.ACCESS_STREAMING);
              ZipInputStream zin = new ZipInputStream(new BufferedInputStream(raw, 1 << 16));
              ZipOutputStream zout = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(out), 1 << 18))) {
@@ -179,10 +181,12 @@ final class PatchEngine {
             while ((e = zin.getNextEntry()) != null) {
                 String name = e.getName();
                 if (e.isDirectory()) continue;
-                seen.add(name);
+                String base = name.substring(name.lastIndexOf('/') + 1).toLowerCase(java.util.Locale.ROOT);
+                File repl = name.equals(GAME_ENTRY) ? game : (base.endsWith(".ogg") ? byBase.get(base) : null);
                 zout.putNextEntry(new ZipEntry(name));
-                if (name.equals(GAME_ENTRY)) {
-                    try (InputStream in = new FileInputStream(game)) {
+                if (repl != null) {
+                    if (repl != game) used.add(base);
+                    try (InputStream in = new FileInputStream(repl)) {
                         int n;
                         while ((n = in.read(buf)) > 0) zout.write(buf, 0, n);
                     }
@@ -195,9 +199,8 @@ final class PatchEngine {
             String prefix = oggPrefix == null ? "" : oggPrefix.trim();
             if (!prefix.isEmpty() && !prefix.endsWith("/")) prefix += "/";
             for (File f : oggs) {
-                String name = prefix + f.getName();
-                if (seen.contains(name)) continue;
-                zout.putNextEntry(new ZipEntry(name));
+                if (used.contains(f.getName().toLowerCase(java.util.Locale.ROOT))) continue;
+                zout.putNextEntry(new ZipEntry(prefix + f.getName()));
                 try (InputStream in = new FileInputStream(f)) {
                     int n;
                     while ((n = in.read(buf)) > 0) zout.write(buf, 0, n);
@@ -205,5 +208,20 @@ final class PatchEngine {
                 zout.closeEntry();
             }
         }
+    }
+
+    /** Removes every trace of patching: marker files and our cached chapter packages. */
+    static void restoreOriginal(Context c) {
+        for (int ch = 0; ch <= 5; ch++) {
+            new File(Store.dir(c, "patched"), "chapter" + ch + ".wad").delete();
+            Store.wadFile(c, ch).delete();
+        }
+        File t = Store.dir(c, "tmp");
+        File[] fs = t.listFiles();
+        if (fs != null) for (File f : fs) f.delete();
+        android.content.SharedPreferences.Editor ed = Store.prefs(c).edit();
+        for (String k : new ArrayList<>(Store.prefs(c).getAll().keySet()))
+            if (k.startsWith("on.")) ed.putBoolean(k, false);
+        ed.apply();
     }
 }
