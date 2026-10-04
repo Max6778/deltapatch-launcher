@@ -96,13 +96,34 @@ def patch_manifest(dec: pathlib.Path, new_pkg: str) -> None:
         add(LAUNCHER_CLASS, True)
         add("com.deltapatch.launcher.SavesActivity", False)
         add("com.deltapatch.launcher.SaveEditorActivity", False)
+        add("com.deltapatch.launcher.MakeActivity", False)
 
     app.set(A + "largeHeap", "true")
+    app.set(A + "requestLegacyExternalStorage", "true")
+    have = {e.get(A + "name") for e in root.findall("uses-permission")}
+    first_app = list(root).index(app)
+    added = 0
+    for perm in ("android.permission.INTERNET",
+                              "android.permission.RECORD_AUDIO",
+                              "android.permission.READ_EXTERNAL_STORAGE",
+                              "android.permission.WRITE_EXTERNAL_STORAGE",
+                              "android.permission.MANAGE_EXTERNAL_STORAGE",
+                              "com.termux.permission.RUN_COMMAND"):
+        if perm not in have:
+            el = ET.Element("uses-permission")
+            el.set(A + "name", perm)
+            root.insert(first_app + added, el)
+            added += 1
+    first_app += added
     # distinct name under the icon so it can't be confused with the installed original
     app.set(A + "label", "DELTARUNE Patch")
     for act in app.findall("activity"):
         if A + "label" in act.attrib:
             del act.attrib[A + "label"]
+    if root.find("queries") is None:
+        q = ET.Element("queries")
+        ET.SubElement(q, "package").set(A + "name", "com.termux")
+        root.insert(first_app, q)
     root.set("package", new_pkg)
     tree.write(mf, encoding="utf-8", xml_declaration=True)
     print("manifest: %s -> %s" % (old, new_pkg))
@@ -111,7 +132,7 @@ def patch_manifest(dec: pathlib.Path, new_pkg: str) -> None:
 HOOK = (
     "    invoke-static {p0, p1}, Lcom/deltapatch/launcher/Hook;->isPatched(Ljava/lang/Object;Ljava/lang/String;)Z\n"
     "\n    move-result v0\n\n    if-eqz v0, :dp_continue\n\n"
-    "    const-wide/16 v0, 0x0\n\n    return-wide v0\n\n    :dp_continue\n"
+    "    const-wide/high16 v0, 0x3ff0000000000000L\n\n    return-wide v0\n\n    :dp_continue\n"
 )
 
 
@@ -141,8 +162,8 @@ def patch_smali(dec: pathlib.Path) -> None:
     n = int(m.group(2))
     if m.group(1) == "registers":
         n -= 2  # this + one parameter
-    if n < 1:
-        sys.exit("ExtractAssetExt has no free register for the hook")
+    if n < 2:
+        sys.exit("ExtractAssetExt needs 2 free registers for the hook")
     k = j + 1
     while lines[k].strip() == "" or lines[k].lstrip().startswith("."):
         if lines[k].startswith(".end method"):
