@@ -40,7 +40,14 @@ jobs:
       - name: Download base.apk from the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download "${{ inputs.release_tag }}" -p base.apk -O base.apk
+        run: |
+          # base-bundled.apk (made once by the "Bundle PC data.win into base.apk" workflow) already holds the .win files
+          if gh release download "${{ inputs.release_tag }}" -p base-bundled.apk -O base.apk 2>/dev/null; then
+            echo "Using base-bundled.apk"
+          else
+            gh release download "${{ inputs.release_tag }}" -p base.apk -O base.apk
+            echo "Using plain base.apk"
+          fi
 
       - name: Get apktool
         run: curl -L -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar
@@ -56,6 +63,23 @@ jobs:
 
       - name: Decode base.apk
         run: java -jar apktool.jar d -f -o dec base.apk
+
+      - name: Bundle the PC data.win files next to the Android chapter files (optional)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dec/assets/pc
+          if ls dec/assets/pc/chapter*.win > /dev/null 2>&1; then
+            echo "The .win files are already inside the APK - nothing to download"
+            ls -la dec/assets/pc
+            exit 0
+          fi
+          for N in 0 1 2 3 4 5; do
+            if gh release download "${{ inputs.release_tag }}" -p "chapter$N.win" -D dec/assets/pc 2>/dev/null; then
+              echo "bundled chapter$N.win"
+            fi
+          done
+          ls -la dec/assets/pc
 
       - name: Safety check - package must differ from the installed game
         run: |

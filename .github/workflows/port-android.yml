@@ -1,0 +1,107 @@
+name: Port a PC mod to Android (adds the touch controls) -> small .xdelta for the launcher
+
+# Input files (all in ONE release of a PRIVATE repo, default tag "base"):
+#   base.apk (or base-bundled.apk)  - the Android port
+#   chapterN.win                    - the PC data.win of that chapter (same one you bundle into the APK)
+#   <mod_patch>                     - a raw PC mod patch (.xdelta). Leave empty to convert the vanilla chapter.
+# Output: <output_name> = an .xdelta that the launcher applies to the bundled chapterN.win. The result already
+# contains the Android touch controls, so just "Add mod" it in the launcher (keep "android" in the file name).
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag that holds the files"
+        required: true
+        default: "base"
+      chapter:
+        description: "Chapter number"
+        required: true
+        default: "3"
+      mod_patch:
+        description: "Raw PC mod patch asset name (empty = vanilla)"
+        required: false
+        default: "kaizo_knight.xdelta"
+      output_name:
+        description: "Name of the Android-ready patch to create"
+        required: true
+        default: "kaizo_knight_android.xdelta"
+
+permissions:
+  contents: write
+
+jobs:
+  port:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xdelta3
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Download the PC file, the mod and the Android port
+        run: |
+          mkdir -p in out
+          CH="${{ inputs.chapter }}"
+          TAG="${{ inputs.release_tag }}"
+          gh release download "$TAG" -R "${{ github.repository }}" -p "chapter$CH.win" -O in/pc.win
+          if [ -n "${{ inputs.mod_patch }}" ]; then
+            gh release download "$TAG" -R "${{ github.repository }}" -p "${{ inputs.mod_patch }}" -O in/mod.xdelta
+          fi
+          if ! gh release download "$TAG" -R "${{ github.repository }}" -p base.apk -O in/base.apk 2>/dev/null; then
+            gh release download "$TAG" -R "${{ github.repository }}" -p base-bundled.apk -O in/base.apk
+          fi
+          unzip -p in/base.apk "assets/chapter$CH.wad" > in/ch.wad
+          unzip -p in/ch.wad assets/game.droid > in/android.droid
+          rm -f in/base.apk in/ch.wad
+          ls -la in
+
+      - name: Apply the raw PC mod (if any)
+        run: |
+          if [ -f in/mod.xdelta ]; then
+            xdelta3 -d -f -B 134217728 -s in/pc.win in/mod.xdelta in/target.win
+          else
+            cp in/pc.win in/target.win
+          fi
+          ls -la in/target.win
+
+      - name: Build UndertaleModCli
+        run: |
+          git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/UnderminersTeam/UndertaleModTool utmt
+          cd utmt
+          dotnet publish UndertaleModCli -c Release --no-self-contained -o "$GITHUB_WORKSPACE/cli"
+
+      - name: Add the Android touch controls and fixes
+        run: |
+          set -o pipefail
+          export UTMT_ANDROID="$GITHUB_WORKSPACE/in/android.droid"
+          dotnet cli/UndertaleModCli.dll load in/target.win -s scripts/AndroidPort.csx -o out/ported.droid -f 2>&1 | tee out/port.log
+          ls -la out
+
+      - name: Make the small patch for the launcher and check it
+        run: |
+          xdelta3 -e -f -9 -B 268435456 -s in/pc.win out/ported.droid "out/${{ inputs.output_name }}"
+          xdelta3 -d -f -B 268435456 -s in/pc.win "out/${{ inputs.output_name }}" out/verify.bin
+          cmp out/verify.bin out/ported.droid && echo "VERIFIED: patch + PC file reproduces the ported file"
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-ready-patch
+          path: |
+            out/${{ inputs.output_name }}
+            out/port.log
+          compression-level: 0
+
+      - name: Attach to the private release
+        run: |
+          gh release upload "${{ inputs.release_tag }}" -R "${{ github.repository }}" \
+            "out/${{ inputs.output_name }}" out/port.log --clobber

@@ -1,0 +1,56 @@
+name: Bundle PC data.win into base.apk (run once)
+
+# Adds the PC chapterN.win files from the release to a copy of base.apk (assets/pc/) and uploads it as
+# base-bundled.apk. After that, "Build DELTARUNE patch-launcher APK" uses base-bundled.apk and no longer downloads
+# the .win files on every build. Run in a PRIVATE repo only; never share the resulting APK.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag that holds base.apk and chapterN.win"
+        required: true
+        default: "base"
+      output_apk:
+        description: "Name of the bundled APK that will be uploaded"
+        required: true
+        default: "base-bundled.apk"
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download base.apk and the chapterN.win files
+        run: |
+          mkdir work && cd work
+          gh release download "${{ inputs.release_tag }}" -R "${{ github.repository }}" -p base.apk -O base.apk
+          mkdir -p assets/pc
+          found=0
+          for N in 0 1 2 3 4 5; do
+            if gh release download "${{ inputs.release_tag }}" -R "${{ github.repository }}" -p "chapter$N.win" -O "assets/pc/chapter$N.win" 2>/dev/null; then
+              echo "found chapter$N.win"
+              found=1
+            fi
+          done
+          if [ "$found" = 0 ]; then
+            echo "::error::No chapterN.win assets in release ${{ inputs.release_tag }} (name them chapter1.win ... chapter5.win)"
+            exit 1
+          fi
+          ls -la assets/pc
+
+      - name: Add the files to the APK (stored, not recompressed)
+        run: |
+          cd work
+          cp base.apk "${{ inputs.output_apk }}"
+          zip -0 -r "${{ inputs.output_apk }}" assets/pc
+          unzip -l "${{ inputs.output_apk }}" | grep "assets/pc"
+          ls -la "${{ inputs.output_apk }}"
+
+      - name: Upload the bundled APK to the release
+        run: |
+          gh release upload "${{ inputs.release_tag }}" -R "${{ github.repository }}" "work/${{ inputs.output_apk }}" --clobber
