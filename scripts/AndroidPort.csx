@@ -162,6 +162,10 @@ RegexEdit("gml_Object_obj_initializer2_Step_0", "wait for the textures on every 
     @"\s*if \(!textures_loaded\)\s*\{\s*textures_loaded = loadtex\.loaded;\s*\}\s*if \(textures_loaded\)\s*\{\s*show_debug_message_concat\(""TEXTURES LOADED""\);\s*\}\s*else\s*\{\s*exit;\s*\}\s*\}",
     "\n}\nif (!textures_loaded)\n{\n    textures_loaded = loadtex.loaded;\n}\nif (textures_loaded)\n{\n    show_debug_message_concat(\"TEXTURES LOADED\");\n}\nelse\n{\n    exit;\n}");
 
+RegexEdit("gml_Object_obj_gamecontroller_Other_75", "do not crash when an async system event has no text type",
+    @"show_debug_message\(""\*\*\*\*\* Event = "" \+ ds_map_find_value\(async_load, ""event_type""\)\);",
+    "show_debug_message(\"***** Event = \" + string(ds_map_find_value(async_load, \"event_type\")));");
+
 RegexEdit("gml_GlobalScript_snd_init", "music folder on Android",
     @"initsongvar = dir \+ arg0;",
     "if (os_type == os_android)\n    {\n        dir = temp_directory + \"mus/\";\n    }\n    initsongvar = dir + arg0;");
