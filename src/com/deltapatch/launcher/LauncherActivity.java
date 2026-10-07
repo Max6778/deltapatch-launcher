@@ -83,7 +83,7 @@ public class LauncherActivity extends Activity {
         tools.addView(btn("Add mod", v -> addMod()), weight());
         tools.addView(btn("Saves", v -> startActivity(new Intent(this, SavesActivity.class))), weight());
         tools.addView(btn("Restore", v -> restore()), weight());
-        tools.addView(btn("Logs", v -> showLogs()), weight());
+        tools.addView(btn("Settings", v -> settings()), weight());
         root.addView(tools);
 
         status = new TextView(this);
@@ -206,7 +206,8 @@ public class LauncherActivity extends Activity {
                     });
                 } catch (final Exception e) {
                     CrashLog.note(this, "add mod failed: " + e);
-                    ui.post(() -> status.setText("That file is not a usable .xdelta patch: " + e.getMessage()));
+                    ui.post(() -> status.setText("That file is not a usable .xdelta patch: " + e.getMessage()
+                            + (String.valueOf(e.getMessage()).contains("Secondary") ? " (the patch was made with compression the launcher can't read; rebuild it with -S none)" : "")));
                 }
             }).start();
         } else if (req == REQ_OGG && pendingMod != null) {
@@ -289,11 +290,39 @@ public class LauncherActivity extends Activity {
     }
 
     private void startGame() {
+        int mode = Store.prefs(this).getInt("ctlmode", 0);
+        if (mode != 0) SaveStore.writeTouchConfig(this, mode == 2);
         Intent i = new Intent();
         i.setComponent(new ComponentName(getPackageName(), GAME));
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         startActivity(i);
         finish();
+    }
+
+    // ---------------------------------------------------------------- settings
+
+    private void settings() {
+        final int mode = Store.prefs(this).getInt("ctlmode", 0);
+        final int size = Store.prefs(this).getInt("ctlsize", 1);
+        final int alpha = Store.prefs(this).getInt("ctlalpha", 1);
+        String[] modes = {"Auto (launcher buttons only if the mod has no touch controls)",
+                "Launcher buttons (works with any mod)", "Game's own controls (Hadrian's)"};
+        String[] sizes = {"small", "medium", "large"};
+        String[] alphas = {"faint", "normal", "strong"};
+        String[] items = {
+                "Touch controls: " + modes[mode],
+                "Launcher button size: " + sizes[size],
+                "Launcher button opacity: " + alphas[alpha],
+                "Show logs"};
+        new AlertDialog.Builder(this).setTitle("Settings")
+                .setItems(items, (d, w) -> {
+                    if (w == 0) Store.prefs(this).edit().putInt("ctlmode", (mode + 1) % 3).apply();
+                    else if (w == 1) Store.prefs(this).edit().putInt("ctlsize", (size + 1) % 3).apply();
+                    else if (w == 2) Store.prefs(this).edit().putInt("ctlalpha", (alpha + 1) % 3).apply();
+                    else { showLogs(); return; }
+                    settings();
+                })
+                .setNegativeButton("Close", null).show();
     }
 
     // ---------------------------------------------------------------- logs
@@ -307,21 +336,32 @@ public class LauncherActivity extends Activity {
 
     private void showLogs() {
         File[] fs = CrashLog.dir(this).listFiles();
-        if (fs == null || fs.length == 0) {
-            status.setText("No logs yet.");
-            return;
-        }
+        if (fs == null) fs = new File[0];
         Arrays.sort(fs, new Comparator<File>() {
             public int compare(File a, File b) { return Long.compare(b.lastModified(), a.lastModified()); }
         });
         final List<File> list = new ArrayList<>();
         Collections.addAll(list, fs);
-        String[] names = new String[list.size()];
-        for (int i = 0; i < names.length; i++) names[i] = list.get(i).getName();
+        String[] names = new String[list.size() + 1];
+        names[0] = ">> Save the game's log now (use right after the game showed an error)";
+        for (int i = 0; i < list.size(); i++) names[i + 1] = list.get(i).getName();
         Store.prefs(this).edit().putLong("crashSeen", System.currentTimeMillis()).apply();
         crashNote.setVisibility(View.GONE);
-        new AlertDialog.Builder(this).setTitle("Logs (newest first)")
-                .setItems(names, (d, w) -> viewLog(list.get(w))).show();
+        new AlertDialog.Builder(this).setTitle("Logs")
+                .setItems(names, (d, w) -> {
+                    if (w == 0) {
+                        status.setText("Saving the log...");
+                        new Thread(() -> {
+                            final File f = CrashLog.capture(getApplicationContext());
+                            ui.post(() -> {
+                                if (f == null) status.setText("Could not read the system log.");
+                                else { status.setText("Saved " + f.getName()); viewLog(f); }
+                            });
+                        }).start();
+                    } else {
+                        viewLog(list.get(w - 1));
+                    }
+                }).show();
     }
 
     private void viewLog(File f) {

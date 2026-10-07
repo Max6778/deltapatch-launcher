@@ -54,6 +54,16 @@ final class SaveStore {
         return l.isEmpty() ? c.getFilesDir() : l.get(0).getParentFile();
     }
 
+    /** Switches the port's own touch controls on or off (the game reads touchconfig.ini, key ACCESS/TOUCH). */
+    static void writeTouchConfig(Context c, boolean on) {
+        byte[] data = ("[ACCESS]\r\nTOUCH=\"" + (on ? "1" : "0") + "\"\r\n").getBytes(CS);
+        for (File r : roots(c)) {
+            try {
+                Store.writeBytes(new File(r, "touchconfig.ini"), data);
+            } catch (IOException ignored) { }
+        }
+    }
+
     static File backup(Context c) throws IOException {
         List<File> saves = find(c);
         File root = Store.dir(c, "backups");

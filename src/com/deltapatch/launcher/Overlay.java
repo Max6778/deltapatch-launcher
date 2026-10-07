@@ -26,14 +26,18 @@ public final class Overlay {
         try {
             String wad = a.getIntent() == null ? null : a.getIntent().getStringExtra("wad");
             if (wad == null || !new File(Store.dir(a, "patched"), wad).exists()) return;
-            if (!Store.prefs(a).getBoolean("overlay", true)) return;
-            if (new File(Store.dir(a, "patched"), wad.replace(".wad", ".gmltouch")).exists()) return; // game has its own touch UI
+            int mode = Store.prefs(a).getInt("ctlmode", 0); // 0 auto, 1 launcher buttons, 2 game's own controls
+            if (mode == 2) return;
+            boolean gml = new File(Store.dir(a, "patched"), wad.replace(".wad", ".gmltouch")).exists();
+            if (mode == 0 && gml) return; // auto: the game has its own touch UI
             build(a);
             CrashLog.note(a, "touch buttons shown for " + wad);
         } catch (Throwable t) {
             CrashLog.note(a, "touch buttons failed: " + t);
         }
     }
+
+    private static int fillAlpha = 110, strokeAlpha = 170;
 
     private static int dp(Activity a, int v) {
         return (int) (v * a.getResources().getDisplayMetrics().density + 0.5f);
@@ -42,15 +46,19 @@ public final class Overlay {
     private static void build(final Activity a) {
         FrameLayout root = new FrameLayout(a);
         final List<View> keys = new ArrayList<>();
-        int s = dp(a, 60);
+        int sizeIdx = Store.prefs(a).getInt("ctlsize", 1);
+        int alphaIdx = Store.prefs(a).getInt("ctlalpha", 1);
+        fillAlpha = alphaIdx == 0 ? 60 : alphaIdx == 1 ? 110 : 170;
+        strokeAlpha = alphaIdx == 0 ? 100 : alphaIdx == 1 ? 170 : 230;
+        int s = dp(a, sizeIdx == 0 ? 48 : sizeIdx == 1 ? 60 : 72);
         int m = dp(a, 16);
-        add(a, root, keys, "^", KeyEvent.KEYCODE_DPAD_UP, s, Gravity.BOTTOM | Gravity.LEFT, m + s, 0, 0, m + 2 * s);
-        add(a, root, keys, "<", KeyEvent.KEYCODE_DPAD_LEFT, s, Gravity.BOTTOM | Gravity.LEFT, m, 0, 0, m + s);
-        add(a, root, keys, ">", KeyEvent.KEYCODE_DPAD_RIGHT, s, Gravity.BOTTOM | Gravity.LEFT, m + 2 * s, 0, 0, m + s);
-        add(a, root, keys, "v", KeyEvent.KEYCODE_DPAD_DOWN, s, Gravity.BOTTOM | Gravity.LEFT, m + s, 0, 0, m);
-        add(a, root, keys, "Z", KeyEvent.KEYCODE_Z, s, Gravity.BOTTOM | Gravity.RIGHT, 0, 0, m, m + s);
-        add(a, root, keys, "X", KeyEvent.KEYCODE_X, s, Gravity.BOTTOM | Gravity.RIGHT, 0, 0, m + s + dp(a, 10), m);
-        add(a, root, keys, "C", KeyEvent.KEYCODE_C, s, Gravity.BOTTOM | Gravity.RIGHT, 0, 0, m + s + dp(a, 10), m + s + dp(a, 10));
+        add(a, root, keys, "^", KeyEvent.KEYCODE_DPAD_UP, 0, s, Gravity.BOTTOM | Gravity.LEFT, m + s, 0, 0, m + 2 * s);
+        add(a, root, keys, "<", KeyEvent.KEYCODE_DPAD_LEFT, 0, s, Gravity.BOTTOM | Gravity.LEFT, m, 0, 0, m + s);
+        add(a, root, keys, ">", KeyEvent.KEYCODE_DPAD_RIGHT, 0, s, Gravity.BOTTOM | Gravity.LEFT, m + 2 * s, 0, 0, m + s);
+        add(a, root, keys, "v", KeyEvent.KEYCODE_DPAD_DOWN, 0, s, Gravity.BOTTOM | Gravity.LEFT, m + s, 0, 0, m);
+        add(a, root, keys, "Z", KeyEvent.KEYCODE_Z, KeyEvent.KEYCODE_ENTER, s, Gravity.BOTTOM | Gravity.RIGHT, 0, 0, m, m + s);
+        add(a, root, keys, "X", KeyEvent.KEYCODE_X, KeyEvent.KEYCODE_SHIFT_LEFT, s, Gravity.BOTTOM | Gravity.RIGHT, 0, 0, m + s + dp(a, 10), m);
+        add(a, root, keys, "C", KeyEvent.KEYCODE_C, KeyEvent.KEYCODE_CTRL_LEFT, s, Gravity.BOTTOM | Gravity.RIGHT, 0, 0, m + s + dp(a, 10), m + s + dp(a, 10));
 
         final TextView toggle = circle(a, "=", dp(a, 40));
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(a, 40), dp(a, 40), Gravity.TOP | Gravity.RIGHT);
@@ -71,13 +79,13 @@ public final class Overlay {
         t.setGravity(Gravity.CENTER);
         GradientDrawable g = new GradientDrawable();
         g.setShape(GradientDrawable.OVAL);
-        g.setColor(Color.argb(110, 40, 40, 40));
-        g.setStroke(dp(a, 2), Color.argb(170, 255, 255, 255));
+        g.setColor(Color.argb(fillAlpha, 40, 40, 40));
+        g.setStroke(dp(a, 2), Color.argb(strokeAlpha, 255, 255, 255));
         t.setBackground(g);
         return t;
     }
 
-    private static void add(final Activity a, FrameLayout root, List<View> keys, String label, final int code, int size,
+    private static void add(final Activity a, FrameLayout root, List<View> keys, String label, final int code, final int alt, int size,
                             int gravity, int left, int top, int right, int bottom) {
         TextView t = circle(a, label, size);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(size, size, gravity);
@@ -86,9 +94,11 @@ public final class Overlay {
             int act = ev.getActionMasked();
             if (act == MotionEvent.ACTION_DOWN) {
                 send(a, KeyEvent.ACTION_DOWN, code);
+                if (alt != 0) send(a, KeyEvent.ACTION_DOWN, alt);
                 v.setAlpha(0.6f);
             } else if (act == MotionEvent.ACTION_UP || act == MotionEvent.ACTION_CANCEL) {
                 send(a, KeyEvent.ACTION_UP, code);
+                if (alt != 0) send(a, KeyEvent.ACTION_UP, alt);
                 v.setAlpha(1f);
             }
             return true;

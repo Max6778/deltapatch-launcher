@@ -92,6 +92,39 @@ public final class CrashLog {
         return sb.toString();
     }
 
+    /** Saves this app's system log (includes the game's own error screens, e.g. GML errors) to logs/game-log-<time>.txt. */
+    static File capture(Context c) {
+        try {
+            String stamp = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date());
+            File f = new File(dir(c), "game-log-" + stamp + ".txt");
+            StringBuilder sb = new StringBuilder();
+            sb.append("Game log captured ").append(new Date()).append("\nPackage: ").append(c.getPackageName()).append("\n");
+            sb.append("Device: ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL)
+                    .append(", Android ").append(Build.VERSION.RELEASE).append("\nEnabled mods: ");
+            try {
+                for (Mod m : Mod.list(c)) if (m.enabled) sb.append(m.name).append(" (ch").append(m.chapter).append(") ");
+            } catch (Throwable ignored) { }
+            sb.append("\n\n");
+            Process p = null;
+            try {
+                p = Runtime.getRuntime().exec(new String[]{"logcat", "-d", "-t", "4000"});
+                BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+                String line;
+                int n = 0;
+                while ((line = r.readLine()) != null && n < 6000) {
+                    sb.append(line).append('\n');
+                    n++;
+                }
+            } finally {
+                if (p != null) p.destroy();
+            }
+            try (FileWriter w = new FileWriter(f)) { w.write(sb.toString()); }
+            return f;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     /** Appends one line to logs/launcher.log. */
     static void note(Context c, String line) {
         try {
