@@ -12,7 +12,8 @@ using UndertaleModLib.Models;
 //   1. copies the Android-only touch-control sprites (with their texture pages) from the port's own game file,
 //   2. recompiles the Android-only scripts and objects (touch UI, virtual keys, joystick) into the PC file,
 //   3. calls scr_init_touch_controls() at start-up,
-//   4. fixes the texture pre-load that hangs on Android and points music at temp_directory/mus.
+//   4. guards the async system event handler and points music at temp_directory/mus.
+//      (The Android texture pre-load edit was removed: with it the game stayed black. The PC code path boots fine.)
 // Usage: UTMT_ANDROID=<port game file> UndertaleModCli load <pc file> -s AndroidPort.csx -o <out> -f
 
 EnsureDataLoaded();
@@ -153,14 +154,6 @@ void RegexEdit(string codeName, string what, string pattern, string replacement)
 RegexEdit("gml_Object_obj_initializer2_Create_0", "start the touch controls",
     @"(global\.is_console = scr_is_switch_os\(\) \|\| os_type == os_ps4 \|\| os_type == os_ps5;)",
     "$1\nscr_init_touch_controls();");
-
-RegexEdit("gml_Object_obj_initializer2_Create_0", "texture prefetch that hangs on Android",
-    @"if \(global\.is_console\)\s*\{\s*loadtex = instance_create\(0, 0, obj_prefetchtex\);\s*\}\s*else\s*\{\s*scr_prefetch_textures\(\);\s*\}",
-    "loadtex = instance_create(0, 0, obj_prefetchtex);");
-
-RegexEdit("gml_Object_obj_initializer2_Step_0", "wait for the textures on every platform",
-    @"\s*if \(!textures_loaded\)\s*\{\s*textures_loaded = loadtex\.loaded;\s*\}\s*if \(textures_loaded\)\s*\{\s*show_debug_message_concat\(""TEXTURES LOADED""\);\s*\}\s*else\s*\{\s*exit;\s*\}\s*\}",
-    "\n}\nif (!textures_loaded)\n{\n    textures_loaded = loadtex.loaded;\n}\nif (textures_loaded)\n{\n    show_debug_message_concat(\"TEXTURES LOADED\");\n}\nelse\n{\n    exit;\n}");
 
 RegexEdit("gml_Object_obj_gamecontroller_Other_75", "do not crash when an async system event has no text type",
     @"show_debug_message\(""\*\*\*\*\* Event = "" \+ ds_map_find_value\(async_load, ""event_type""\)\);",
