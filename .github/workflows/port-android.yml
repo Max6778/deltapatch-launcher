@@ -88,7 +88,7 @@ jobs:
 
       - name: Make the small patch for the launcher and check it
         run: |
-          xdelta3 -e -f -9 -B 268435456 -s in/pc.win out/ported.droid "out/${{ inputs.output_name }}"
+          xdelta3 -e -f -9 -S none -B 268435456 -s in/pc.win out/ported.droid "out/${{ inputs.output_name }}"
           xdelta3 -d -f -B 268435456 -s in/pc.win "out/${{ inputs.output_name }}" out/verify.bin
           cmp out/verify.bin out/ported.droid && echo "VERIFIED: patch + PC file reproduces the ported file"
           ls -la out
