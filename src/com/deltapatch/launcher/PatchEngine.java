@@ -34,16 +34,24 @@ final class PatchEngine {
 
     // ------------------------------------------------------------------ public API
 
+    /** Names of the bundled PC files for a chapter: chapterN.win and chapterN_<version>.win (several game versions). */
+    static List<String> bundledNames(Context c, int ch) {
+        List<String> out = new ArrayList<>();
+        try {
+            String[] names = c.getAssets().list("pc");
+            if (names != null) {
+                java.util.Arrays.sort(names);
+                for (String n : names)
+                    if (n.equals("chapter" + ch + ".win") || (n.startsWith("chapter" + ch + "_") && n.endsWith(".win"))) out.add(n);
+            }
+        } catch (IOException ignored) { }
+        return out;
+    }
+
     /** Chapters for which a PC data.win is bundled in the APK. */
     static List<Integer> bundledChapters(Context c) {
         List<Integer> out = new ArrayList<>();
-        try {
-            String[] names = c.getAssets().list("pc");
-            if (names != null)
-                for (String n : names)
-                    for (int ch = 0; ch <= 5; ch++)
-                        if (n.equals("chapter" + ch + ".win")) out.add(ch);
-        } catch (IOException ignored) { }
+        for (int ch = 0; ch <= 5; ch++) if (!bundledNames(c, ch).isEmpty()) out.add(ch);
         return out;
     }
 
@@ -107,17 +115,27 @@ final class PatchEngine {
         return new File(Store.dir(c, "built"), "music.list");
     }
 
-    /** Extra music goes to <cache>/mus, which is where the Android build of the game looks (temp_directory + "mus/"). */
+    /** Music folders the game may read: the Android build uses <cache>/mus, the PC code uses "mus/" relative to its working folder. */
+    private static List<File> musicDirs(Context c) {
+        List<File> out = new ArrayList<>();
+        out.add(new File(c.getCacheDir(), "mus"));
+        out.add(new File(c.getFilesDir(), "mus"));
+        File ext = c.getExternalFilesDir(null);
+        if (ext != null) out.add(new File(ext, "mus"));
+        return out;
+    }
+
+    /** Extra music is copied to every folder the game might read (the exact one differs between PC and Android code). */
     private static void copyMusic(Context c, List<Mod> mods) throws IOException {
         removeMusic(c);
-        File mus = new File(c.getCacheDir(), "mus");
         List<String> added = new ArrayList<>();
         for (Mod m : mods) {
             if (!m.enabled) continue;
             for (File f : m.oggs()) {
-                mus.mkdirs();
-                File d = new File(mus, f.getName());
-                if (!d.exists() || d.length() != f.length()) Store.copy(f, d);
+                for (File dir : musicDirs(c)) {
+                    dir.mkdirs();
+                    Store.copy(f, new File(dir, f.getName()));
+                }
                 added.add(f.getName());
             }
         }
@@ -131,7 +149,8 @@ final class PatchEngine {
         if (!list.isFile()) return;
         try {
             String[] names = new String(Store.readBytes(list), "UTF-8").split("\n");
-            for (String n : names) if (!n.trim().isEmpty()) new File(new File(c.getCacheDir(), "mus"), n.trim()).delete();
+            for (String n : names)
+                if (!n.trim().isEmpty()) for (File dir : musicDirs(c)) new File(dir, n.trim()).delete();
         } catch (IOException ignored) { }
         list.delete();
     }
@@ -168,40 +187,53 @@ final class PatchEngine {
         File a = new File(tmp, "a.bin"), b = new File(tmp, "b.bin"), nw = new File(tmp, "new.wad");
         try {
             checkSpace(c, asset, tmp);
-            boolean hasPc = bundledChapters(c).contains(ch);
+            List<String> bases = bundledNames(c, ch);
+            int total = bases.size() + 1; // every bundled PC version, then the Android game data
+            StringBuilder tried = new StringBuilder();
             File cur = null;
-            // Any mod: try the bundled PC data.win first (PC mods), then the Android game data (mods made for the port).
-            for (int attempt = 0; attempt < (hasPc ? 2 : 1) && cur == null; attempt++) {
-                boolean usePc = hasPc && attempt == 0;
+            for (int attempt = 0; attempt < total && cur == null; attempt++) {
+                boolean usePc = attempt < bases.size();
+                boolean last = attempt == total - 1;
                 a.delete();
                 b.delete();
+                String label;
                 if (usePc) {
-                    log.log("Chapter " + ch + ": reading the bundled PC data.win...");
-                    copyAsset(c, "pc/chapter" + ch + ".win", a);
+                    String n = bases.get(attempt);
+                    log.log("Chapter " + ch + ": reading the bundled " + n + "...");
+                    copyAsset(c, "pc/" + n, a);
+                    label = n + " (" + a.length() + " bytes)";
                 } else {
                     log.log("Chapter " + ch + ": reading the Android game data...");
                     extractEntry(c, asset, GAME_ENTRY, a);
+                    label = "the Android game data (" + a.length() + " bytes)";
                 }
+                if (tried.length() > 0) tried.append(", ");
+                tried.append(label);
                 File work = a;
                 boolean fits = true;
                 for (Mod m : mods) {
                     File next = (work == a) ? b : a;
-                    log.log("Chapter " + ch + ": applying " + m.name + "...");
+                    log.log("Chapter " + ch + ": applying " + m.name + " to " + label + "...");
                     try {
                         Vcdiff.apply(m.patch(), work, next, false, prog);
                     } catch (Vcdiff.ChecksumMismatch e) {
-                        if (usePc) {
-                            log.log("\"" + m.name + "\" does not fit the PC file, trying the Android game data...");
+                        if (!last) {
+                            log.log("\"" + m.name + "\" does not fit that file, trying the next one...");
                             fits = false;
                             break;
                         }
-                        throw new IOException("\"" + m.name + "\" does not fit chapter " + ch + " of this build"
-                                + (hasPc ? " (neither the bundled PC data.win nor the Android game data)" : "")
-                                + ". It was made for a different game version. " + e.getMessage());
+                        long need = 0;
+                        try { need = Vcdiff.requiredSourceSize(m.patch()); } catch (IOException ignored) { }
+                        throw new IOException("\"" + m.name + "\" does not fit chapter " + ch + ": it was made for a different game version."
+                                + (need > 0 ? " It needs a game file of at least " + need + " bytes." : "")
+                                + " Tried: " + tried + ". Add the matching data.win to the build as chapter" + ch + "_<version>.win.");
                     }
                     work = next;
                 }
-                if (fits) cur = work;
+                if (fits) {
+                    cur = work;
+                    log.log("Chapter " + ch + ": the mod fits " + label);
+                }
             }
             log.log("Chapter " + ch + ": packing the game files...");
             rebuildWad(c, asset, cur, nw);
