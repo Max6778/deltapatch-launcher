@@ -75,7 +75,7 @@ jobs:
             exit 0
           fi
           for N in 0 1 2 3 4 5; do
-            if gh release download "${{ inputs.release_tag }}" -p "chapter$N.win" -D dec/assets/pc 2>/dev/null; then
+            if gh release download "${{ inputs.release_tag }}" -p "chapter$N*.win" -D dec/assets/pc 2>/dev/null; then
               echo "bundled chapter$N.win"
             fi
           done

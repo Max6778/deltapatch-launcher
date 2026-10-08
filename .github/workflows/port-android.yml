@@ -17,6 +17,10 @@ on:
         description: "Chapter number"
         required: true
         default: "3"
+      pc_file:
+        description: "PC data.win asset the mod was made for (e.g. chapter3.win or chapter3_v103.win)"
+        required: true
+        default: "chapter3.win"
       mod_patch:
         description: "Raw PC mod patch asset name (empty = vanilla)"
         required: false
@@ -52,7 +56,7 @@ jobs:
           mkdir -p in out
           CH="${{ inputs.chapter }}"
           TAG="${{ inputs.release_tag }}"
-          gh release download "$TAG" -R "${{ github.repository }}" -p "chapter$CH.win" -O in/pc.win
+          gh release download "$TAG" -R "${{ github.repository }}" -p "${{ inputs.pc_file }}" -O in/pc.win
           if [ -n "${{ inputs.mod_patch }}" ]; then
             gh release download "$TAG" -R "${{ github.repository }}" -p "${{ inputs.mod_patch }}" -O in/mod.xdelta
           fi

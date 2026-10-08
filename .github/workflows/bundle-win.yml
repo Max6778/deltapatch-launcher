@@ -32,7 +32,7 @@ jobs:
           mkdir -p assets/pc
           found=0
           for N in 0 1 2 3 4 5; do
-            if gh release download "${{ inputs.release_tag }}" -R "${{ github.repository }}" -p "chapter$N.win" -O "assets/pc/chapter$N.win" 2>/dev/null; then
+            if gh release download "${{ inputs.release_tag }}" -R "${{ github.repository }}" -p "chapter$N*.win" -D assets/pc 2>/dev/null; then
               echo "found chapter$N.win"
               found=1
             fi
