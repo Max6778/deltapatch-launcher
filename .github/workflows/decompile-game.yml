@@ -1,0 +1,112 @@
+name: Decompile a game file (optionally with a mod patch applied)
+
+# Takes a game data file (for example chapter3.win), optionally applies a .xdelta mod patch to it,
+# decompiles all code to GML text, and lets you search it. Run it in a PRIVATE repo only.
+#
+# Both files must be assets of one release in this repo (same way as the other workflows).
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag that holds the game file (and the patch)"
+        required: true
+        default: "decompile-input"
+      game_file:
+        description: "Game data file in that release (chapter3.win, data.win or game.droid)"
+        required: true
+        default: "chapter3.win"
+      patch_name:
+        description: "Optional .xdelta mod patch to apply first (leave empty for none)"
+        required: false
+        default: ""
+      search:
+        description: "Optional search (regular expression) shown in the run summary, e.g. kaizoknight|file_exists"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  decompile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Download the game file
+        run: |
+          mkdir -p in out
+          gh release download "${{ inputs.release_tag }}" -R "${{ github.repository }}" -p "${{ inputs.game_file }}" -O in/game.bin
+          ls -la in
+
+      - name: Apply the patch (optional)
+        if: ${{ inputs.patch_name != '' }}
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xdelta3
+          gh release download "${{ inputs.release_tag }}" -R "${{ github.repository }}" -p "${{ inputs.patch_name }}" -O in/patch.xdelta
+          if ! xdelta3 -d -f -B 134217728 -s in/game.bin in/patch.xdelta in/patched.bin; then
+            echo "::warning::Checksum or window problem - retrying without the checksum check"
+            xdelta3 -d -f -n -B 134217728 -s in/game.bin in/patch.xdelta in/patched.bin
+          fi
+          mv in/patched.bin in/game.bin
+          ls -la in
+
+      - name: Build UndertaleModCli
+        run: |
+          git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/UnderminersTeam/UndertaleModTool utmt
+          cd utmt
+          dotnet publish UndertaleModCli -c Release --no-self-contained -o "$GITHUB_WORKSPACE/cli"
+
+      - name: Decompile
+        run: |
+          export UTMT_OUT="$GITHUB_WORKSPACE/out/code"
+          if ! dotnet cli/UndertaleModCli.dll load in/game.bin -s scripts/ExportCode.csx; then
+            echo "::error::CLI call failed - printing its help"
+            dotnet cli/UndertaleModCli.dll --help || true
+            exit 1
+          fi
+          echo "scripts: $(ls out/code | wc -l)"
+
+      - name: Search and summary
+        run: |
+          cd out
+          {
+            echo "## Decompiled ${{ inputs.game_file }} ${{ inputs.patch_name != '' && format('+ {0}', inputs.patch_name) || '' }}"
+            echo "- Code entries: $(ls code | wc -l)"
+            echo "- Failed to decompile: $(grep -l 'DECOMPILE FAILED' code/* 2>/dev/null | wc -l)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          SEARCH='${{ inputs.search }}'
+          if [ -n "$SEARCH" ]; then
+            grep -rnE "$SEARCH" code > search_results.txt || true
+            {
+              echo
+              echo "### Search: \`$SEARCH\` ($(wc -l < search_results.txt) lines)"
+              echo '```'
+              head -150 search_results.txt | cut -c1-220
+              echo '```'
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          zip -qr decompiled_code.zip code
+
+      - name: Upload the results
+        uses: actions/upload-artifact@v4
+        with:
+          name: decompiled-game
+          path: |
+            out/decompiled_code.zip
+            out/search_results.txt
+          compression-level: 0
+          if-no-files-found: ignore
+
+      - name: Also attach to the private release
+        run: |
+          gh release upload "${{ inputs.release_tag }}" -R "${{ github.repository }}" \
+            out/decompiled_code.zip --clobber
