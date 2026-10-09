@@ -115,13 +115,18 @@ final class PatchEngine {
         return new File(Store.dir(c, "built"), "music.list");
     }
 
-    /** Music folders the game may read: the Android build uses <cache>/mus, the PC code uses "mus/" relative to its working folder. */
+    /** Music folders the game may read: the Android build plays from <cache>/mus; mods may check "../mus/" relative to the working folder. */
     private static List<File> musicDirs(Context c) {
         List<File> out = new ArrayList<>();
         out.add(new File(c.getCacheDir(), "mus"));
         out.add(new File(c.getFilesDir(), "mus"));
         File ext = c.getExternalFilesDir(null);
         if (ext != null) out.add(new File(ext, "mus"));
+        // The Kaizo Knight mod checks <working_directory>/../mus/<song>.ogg with file_exists(), so also
+        // cover the folder next to the working folder (app data root, or Android/data/<pkg>/).
+        File fp = c.getFilesDir().getParentFile();
+        if (fp != null) out.add(new File(fp, "mus"));
+        if (ext != null && ext.getParentFile() != null) out.add(new File(ext.getParentFile(), "mus"));
         return out;
     }
 
@@ -135,6 +140,8 @@ final class PatchEngine {
                 for (File dir : musicDirs(c)) {
                     dir.mkdirs();
                     Store.copy(f, new File(dir, f.getName()));
+                    File t = new File(dir, f.getName());
+                    CrashLog.note(c, "music: " + t.getAbsolutePath() + " exists=" + t.isFile() + " size=" + t.length());
                 }
                 added.add(f.getName());
             }
@@ -159,6 +166,7 @@ final class PatchEngine {
         StringBuilder sb = new StringBuilder();
         for (Mod m : mods) {
             sb.append(m.id).append(':').append(m.patch().length()).append(':').append(m.patch().lastModified()).append(';');
+            for (File f : m.oggs()) sb.append(f.getName()).append('=').append(f.length()).append(';');
         }
         return String.valueOf(sb.toString().hashCode()) + "-" + sb.length();
     }
@@ -177,7 +185,7 @@ final class PatchEngine {
 
         if (built.isFile() && sig.equals(readText(sigFile))) {
             log.log("Chapter " + ch + ": using the file built earlier");
-            if (!dest.isFile() || dest.length() != built.length()) Store.copy(built, dest);
+            Store.copy(built, dest); // always refresh: a stale copy in the cache can survive between runs
             marker.createNewFile();
             setGmlTouch(c, ch, mods);
             return;
@@ -236,7 +244,7 @@ final class PatchEngine {
                 }
             }
             log.log("Chapter " + ch + ": packing the game files...");
-            rebuildWad(c, asset, cur, nw);
+            rebuildWad(c, asset, cur, chapterOggs(mods), nw);
             if (built.exists()) built.delete();
             if (!nw.renameTo(built)) Store.copy(nw, built);
             Store.writeBytes(sigFile, sig.getBytes("UTF-8"));
@@ -282,7 +290,21 @@ final class PatchEngine {
         throw new IOException(entry + " not found in " + asset);
     }
 
-    private static void rebuildWad(Context c, String asset, File game, File out) throws IOException {
+    private static List<File> chapterOggs(List<Mod> mods) {
+        List<File> out = new ArrayList<>();
+        for (Mod m : mods) out.addAll(m.oggs());
+        return out;
+    }
+
+    /**
+     * Rebuilds the chapter package with the patched game file. Mod music goes inside as assets/mus/<name>,
+     * replacing a same-named file already there. The package is rebuilt from the APK every time the mod list or
+     * its music changes, and dropped when no mod is ticked, so unticking or removing a mod removes its music too.
+     */
+    private static void rebuildWad(Context c, String asset, File game, List<File> oggs, File out) throws IOException {
+        java.util.Map<String, File> byName = new java.util.HashMap<>();
+        for (File f : oggs) byName.put("assets/mus/" + f.getName().toLowerCase(java.util.Locale.ROOT), f);
+        java.util.Set<String> done = new java.util.HashSet<>();
         try (InputStream raw = c.getAssets().open(asset, AssetManager.ACCESS_STREAMING);
              ZipInputStream zin = new ZipInputStream(new BufferedInputStream(raw, 1 << 16));
              ZipOutputStream zout = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(out), 1 << 18))) {
@@ -292,15 +314,27 @@ final class PatchEngine {
             while ((e = zin.getNextEntry()) != null) {
                 String name = e.getName();
                 if (e.isDirectory()) continue;
+                String key = name.toLowerCase(java.util.Locale.ROOT);
+                File repl = name.equals(GAME_ENTRY) ? game : byName.get(key);
+                if (repl != null && repl != game) done.add(key);
                 zout.putNextEntry(new ZipEntry(name));
-                if (name.equals(GAME_ENTRY)) {
-                    try (InputStream in = new FileInputStream(game)) {
+                if (repl != null) {
+                    try (InputStream in = new FileInputStream(repl)) {
                         int n;
                         while ((n = in.read(buf)) > 0) zout.write(buf, 0, n);
                     }
                 } else {
                     int n;
                     while ((n = zin.read(buf)) > 0) zout.write(buf, 0, n);
+                }
+                zout.closeEntry();
+            }
+            for (java.util.Map.Entry<String, File> en : byName.entrySet()) {
+                if (done.contains(en.getKey())) continue;
+                zout.putNextEntry(new ZipEntry("assets/mus/" + en.getValue().getName()));
+                try (InputStream in = new FileInputStream(en.getValue())) {
+                    int n;
+                    while ((n = in.read(buf)) > 0) zout.write(buf, 0, n);
                 }
                 zout.closeEntry();
             }
