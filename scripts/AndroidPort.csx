@@ -163,6 +163,13 @@ RegexEdit("gml_GlobalScript_snd_init", "music folder on Android",
     @"initsongvar = dir \+ arg0;",
     "if (os_type == os_android)\n    {\n        dir = temp_directory + \"mus/\";\n    }\n    initsongvar = dir + arg0;");
 
+// Mods that pick a custom song (Kaizo Knight) check file_exists(working_directory + "../mus/<song>.ogg").
+// On Android the songs live in temp_directory/mus, so look there too. Only mods that have this script are affected.
+if (Data.Code.ByName("gml_GlobalScript_kaizo_set_music") != null)
+    RegexEdit("gml_GlobalScript_kaizo_set_music", "look for the custom song in the Android music folder",
+        @"var dir = working_directory \+ ""\.\./mus/"";",
+        "var dir = working_directory + \"../mus/\";\n    if (os_type == os_android)\n    {\n        dir = temp_directory + \"mus/\";\n    }");
+
 Console.WriteLine("Compiling " + (newEntries.Count + queued) + " code operations...");
 group.Import();   // throws with the compiler messages on failure
 
